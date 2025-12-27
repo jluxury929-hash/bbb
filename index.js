@@ -2,58 +2,47 @@ const { ethers } = require("ethers");
 const { checkPoolLiquidity } = require("./bridgeUtils");
 require("dotenv").config();
 
-const RPC_URL = process.env.RPC_SOURCE;
-const DESTINATION = process.env.DESTINATION_ADDRESS;
+const provider = new ethers.JsonRpcProvider(process.env.RPC_SOURCE);
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 
-// TARGET CONTRACT TO MONITOR
-const TARGET_CONTRACT = "0xe3be7a547866d5bb7374689ec4d85159590e8010"; 
+// The Token Contract Address from your .env
+const TOKEN_ADDRESS = process.env.TOKEN_ADDRESS;
+const TARGET_POOL = "0xe3be7a547866d5bb7374689ec4d85159590e8010";
 
-// Clean Private Key logic
-let rawKey = process.env.PRIVATE_KEY || "";
-if (rawKey.startsWith("0x0x") || rawKey.startsWith("0x0X")) {
-    rawKey = "0x" + rawKey.substring(4);
-} else if (!rawKey.startsWith("0x")) {
-    rawKey = "0x" + rawKey;
-}
-
-const provider = new ethers.JsonRpcProvider(RPC_URL);
-const wallet = new ethers.Wallet(rawKey, provider);
+// Minimal ABI to check balance and transfer tokens
+const ERC20_ABI = [
+    "function balanceOf(address owner) view returns (uint256)",
+    "function transfer(address to, uint256 amount) returns (bool)",
+    "function decimals() view returns (uint8)"
+];
 
 async function runSystem() {
-    console.log("-----------------------------------------");
-    console.log(`Monitoring Contract: ${TARGET_CONTRACT}`);
-    console.log(`Operating Wallet: ${wallet.address}`);
-
     try {
-        // 1. Fetch Liquidity/Reserve from the contract
-        const liquidity = await checkPoolLiquidity(TARGET_CONTRACT, provider);
-        console.log(`Contract Liquidity Level: ${liquidity}`);
+        console.log("-----------------------------------------");
+        const tokenContract = new ethers.Contract(TOKEN_ADDRESS, ERC20_ABI, wallet);
+        
+        // 1. Get Token Data
+        const decimals = await tokenContract.decimals();
+        const balance = await tokenContract.balanceOf(wallet.address);
+        const readableBalance = ethers.formatUnits(balance, decimals);
+        
+        console.log(`Monitoring Token: ${TOKEN_ADDRESS}`);
+        console.log(`Your Token Balance: ${readableBalance}`);
 
-        // 2. Check your wallet balance
-        const balance = await provider.getBalance(wallet.address);
-        console.log(`Your Wallet Balance: ${ethers.formatEther(balance)} ETH`);
+        // 2. Check Pool Liquidity
+        const liquidity = await checkPoolLiquidity(TARGET_POOL, provider);
+        console.log(`Pool Liquidity: ${liquidity}`);
 
-        const threshold = BigInt(process.env.MIN_LIQUIDITY_USD || "1000");
-
-        // 3. Execution Logic
-        if (BigInt(liquidity) < threshold && balance > ethers.parseEther("0.002")) {
-            console.warn("⚠️ THRESHOLD BREACHED: Liquidating wallet to destination...");
-            
-            const feeData = await provider.getFeeData();
-            const gasLimit = 21000n;
-            const amountToSend = balance - (feeData.gasPrice * gasLimit * 2n);
-
-            if (amountToSend > 0n) {
-                const tx = await wallet.sendTransaction({
-                    to: DESTINATION,
-                    value: amountToSend,
-                    gasLimit: gasLimit
-                });
-                console.log(`✅ Liquidation Sent! Hash: ${tx.hash}`);
+        // 3. Logic
+        if (BigInt(liquidity) < BigInt(process.env.MIN_LIQUIDITY_USD)) {
+            if (balance > 0n) {
+                console.warn("⚠️ Liquidity low! Moving tokens...");
+                const tx = await tokenContract.transfer(process.env.DESTINATION_ADDRESS, balance);
+                console.log(`✅ Tokens Sent! Hash: ${tx.hash}`);
                 await tx.wait();
+            } else {
+                console.log("❌ No tokens found in wallet to move.");
             }
-        } else {
-            console.log("✅ Status: Liquidity sufficient or wallet empty.");
         }
     } catch (error) {
         console.error("❌ Error:", error.message);
@@ -61,4 +50,4 @@ async function runSystem() {
 }
 
 runSystem();
-setInterval(runSystem, 300000); // Check every 5 minutes
+setInterval(runSystem, 300000);
