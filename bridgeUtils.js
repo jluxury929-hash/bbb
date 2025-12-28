@@ -2,21 +2,18 @@ const { ethers } = require("ethers");
 
 async function checkPoolLiquidity(contractAddress, provider) {
     try {
-        const code = await provider.getCode(contractAddress);
-        if (code === "0x") return "0";
-
-        // Try standard Uniswap V3 Liquidity first
-        try {
-            const v3Abi = ["function liquidity() view returns (uint128)"];
-            const v3Contract = new ethers.Contract(contractAddress, v3Abi, provider);
-            const liq = await v3Contract.liquidity();
-            return liq.toString();
-        } catch (e) {
-            // Fallback: Check the ETH balance of the contract itself as a liquidity measure
-            const contractBalance = await provider.getBalance(contractAddress);
-            return contractBalance.toString();
-        }
-    } catch (err) {
+        const abi = [
+            "function totalSupply() view returns (uint256)",
+            "function balanceOf(address) view returns (uint256)"
+        ];
+        const contract = new ethers.Contract(contractAddress, abi, provider);
+        
+        // We monitor the total supply or a specific reserve. 
+        // For LGBT, we'll return total supply as a health metric.
+        const supply = await contract.totalSupply();
+        return supply.toString();
+    } catch (e) {
+        console.error("Error reading contract data:", e.message);
         return "0";
     }
 }
